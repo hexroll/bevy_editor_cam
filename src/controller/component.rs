@@ -1,13 +1,10 @@
 //! The primary [`Component`] of the controller, [`EditorCam`].
 
-use std::{
-    f32::consts::{FRAC_PI_2, PI},
-    time::Duration,
-};
+use std::time::Duration;
 
 use bevy_ecs::prelude::*;
 use bevy_log::prelude::*;
-use bevy_math::{prelude::*, DMat4, DQuat, DVec2, DVec3};
+use bevy_math::{prelude::*, DVec2, DVec3};
 use bevy_platform::time::Instant;
 use bevy_reflect::prelude::*;
 use bevy_render::prelude::*;
@@ -19,7 +16,7 @@ use super::{
     inputs::MotionInputs,
     momentum::{Momentum, Velocity},
     motion::CurrentMotion,
-    projections::{OrthographicSettings, PerspectiveSettings},
+    projections::OrthographicSettings,
     smoothing::{InputQueue, Smoothing},
     zoom::ZoomLimits,
 };
@@ -49,8 +46,6 @@ use super::{
 pub struct EditorCam {
     /// What input motions are currently allowed?
     pub enabled_motion: EnabledMotion,
-    /// The type of camera orbit to use.
-    pub orbit_constraint: OrbitConstraint,
     /// Set near and far zoom limits, as well as the ability to zoom through objects.
     pub zoom_limits: ZoomLimits,
     /// Input smoothing of camera motion.
@@ -63,8 +58,6 @@ pub struct EditorCam {
     /// ends? This is useful to prevent accidentally killing momentum when, for example, releasing a
     /// two finger right click on a trackpad triggers a scroll input.
     pub input_debounce: Duration,
-    /// Settings used when the camera has a perspective [`Projection`].
-    pub perspective: PerspectiveSettings,
     /// Settings used when the camera has an orthographic [`Projection`].
     pub orthographic: OrthographicSettings,
     /// Managed by the camera controller, though you may want to change this when spawning or
@@ -83,13 +76,11 @@ pub struct EditorCam {
 impl Default for EditorCam {
     fn default() -> Self {
         EditorCam {
-            orbit_constraint: Default::default(),
             zoom_limits: Default::default(),
             smoothing: Default::default(),
             sensitivity: Default::default(),
             momentum: Default::default(),
             input_debounce: Duration::from_millis(80),
-            perspective: Default::default(),
             orthographic: Default::default(),
             enabled_motion: Default::default(),
             current_motion: Default::default(),
@@ -101,14 +92,12 @@ impl Default for EditorCam {
 impl EditorCam {
     /// Create a new editor camera component.
     pub fn new(
-        orbit: OrbitConstraint,
         smoothness: Smoothing,
         sensitivity: Sensitivity,
         momentum: Momentum,
         initial_anchor_depth: f64,
     ) -> Self {
         Self {
-            orbit_constraint: orbit,
             smoothing: smoothness,
             sensitivity,
             momentum,
@@ -147,26 +136,7 @@ impl EditorCam {
 
     /// Get the position of the anchor in the camera's view space.
     pub fn anchor_view_space(&self) -> Option<DVec3> {
-        if let CurrentMotion::UserControlled { anchor, .. } = &self.current_motion {
-            Some(*anchor)
-        } else {
-            None
-        }
-    }
-
-    /// Get the position of the anchor in world space.
-    pub fn anchor_world_space(&self, camera_transform: &GlobalTransform) -> Option<DVec3> {
-        self.anchor_view_space().map(|anchor_view_space| {
-            camera_transform
-                .compute_matrix()
-                .as_dmat4()
-                .transform_point3(anchor_view_space)
-        });
-
-        self.anchor_view_space().map(|anchor_view_space| {
-            let (_, r, t) = camera_transform.to_scale_rotation_translation();
-            r.as_dquat() * anchor_view_space + t.as_dvec3()
-        })
+        return None;
     }
 
     /// Should the camera controller prevent new motions from starting, because the user is actively
@@ -185,21 +155,6 @@ impl EditorCam {
                     .momentum_duration()
                     .map(|duration| duration < self.input_debounce)
                     .unwrap_or(false))
-    }
-
-    /// Call this to start an orbiting motion with the optionally supplied anchor position in view
-    /// space. See [`EditorCam`] for usage.
-    pub fn start_orbit(&mut self, anchor: Option<DVec3>) {
-        if !self.enabled_motion.orbit {
-            return;
-        }
-        self.current_motion = CurrentMotion::UserControlled {
-            anchor: self.maybe_update_anchor(anchor),
-            motion_inputs: MotionInputs::OrbitZoom {
-                screenspace_inputs: InputQueue::default(),
-                zoom_inputs: InputQueue::default(),
-            },
-        }
     }
 
     /// Call this to start an panning motion with the optionally supplied anchor position in view
@@ -248,10 +203,6 @@ impl EditorCam {
         } = self.current_motion
         {
             match motion_inputs {
-                MotionInputs::OrbitZoom {
-                    screenspace_inputs: ref mut movement,
-                    ..
-                } => movement.process_input(screenspace_input, self.smoothing.orbit),
                 MotionInputs::PanZoom {
                     screenspace_inputs: ref mut movement,
                     ..
@@ -281,10 +232,6 @@ impl EditorCam {
                 ref motion_inputs,
                 ..
             } => match motion_inputs {
-                MotionInputs::OrbitZoom { .. } => Velocity::Orbit {
-                    anchor,
-                    velocity: motion_inputs.orbit_momentum(self.momentum.init_orbit),
-                },
                 MotionInputs::PanZoom { .. } => Velocity::Pan {
                     anchor,
                     velocity: motion_inputs.pan_momentum(self.momentum.init_pan),
@@ -308,6 +255,11 @@ impl EditorCam {
         for (mut camera_controller, camera, ref mut transform, ref mut projection) in
             cameras.iter_mut()
         {
+            if matches!(**projection, Projection::Custom(_)) {
+                warn_once!("Custom projection is not supported in editor_cam.");
+                continue;
+            }
+
             let dt = time.delta();
             camera_controller
                 .update_transform_and_projection(camera, transform, projection, &mut event, dt);
@@ -323,7 +275,7 @@ impl EditorCam {
         redraw: &mut EventWriter<RequestRedraw>,
         delta_time: Duration,
     ) {
-        let (anchor, orbit, pan, zoom) = match &mut self.current_motion {
+        let (anchor, pan, zoom) = match &mut self.current_motion {
             CurrentMotion::Stationary => return,
             CurrentMotion::Momentum {
                 ref mut velocity, ..
@@ -334,8 +286,7 @@ impl EditorCam {
                         self.current_motion = CurrentMotion::Stationary;
                         return;
                     }
-                    Velocity::Orbit { anchor, velocity } => (anchor, *velocity, DVec2::ZERO, 0.0),
-                    Velocity::Pan { anchor, velocity } => (anchor, DVec2::ZERO, *velocity, 0.0),
+                    Velocity::Pan { anchor, velocity } => (anchor, *velocity, 0.0),
                 }
             }
             CurrentMotion::UserControlled {
@@ -343,7 +294,6 @@ impl EditorCam {
                 motion_inputs,
             } => (
                 anchor,
-                motion_inputs.smooth_orbit_velocity() * self.sensitivity.orbit.as_dvec2(),
                 motion_inputs.smooth_pan_velocity(),
                 motion_inputs.smooth_zoom_velocity() * self.sensitivity.zoom as f64,
             ),
@@ -352,49 +302,10 @@ impl EditorCam {
         // If there is no motion, we will have already early-exited.
         redraw.write(RequestRedraw);
 
-        let screen_to_view_space_at_depth =
-            |perspective: &PerspectiveProjection, depth: f64| -> Option<DVec2> {
-                let target_size = camera.logical_viewport_size()?.as_dvec2();
-                // This is a strange looking, but key part of the otherwise normal looking
-                // screen-to-view transformation. What we are trying to do here is answer "if we
-                // move by one pixel in x and y, how much distance do we cover in the world at the
-                // specified depth?" Because the viewport position's origin is in the corner, we
-                // need to halve the target size, and subtract one pixel. This gets us a viewport
-                // position one pixel diagonal offset from the center of the screen.
-                let mut viewport_position = target_size / 2.0 - 1.0;
-                // Flip the y-coordinate origin from the top to the bottom.
-                viewport_position.y = target_size.y - viewport_position.y;
-                let ndc = viewport_position * 2. / target_size - DVec2::ONE;
-                let ndc_to_view = DMat4::perspective_infinite_reverse_rh(
-                    perspective.fov as f64,
-                    perspective.aspect_ratio as f64,
-                    perspective.near as f64,
-                )
-                .inverse(); // f64 version replaced .get_projection_matrix().as_dmat4().inverse();
-
-                let view_near_plane = ndc_to_view.project_point3(ndc.extend(1.));
-                // Using EPSILON because an ndc with Z = 0 returns NaNs.
-                let view_far_plane = ndc_to_view.project_point3(ndc.extend(f64::EPSILON));
-                let direction = view_far_plane - view_near_plane;
-                let depth_normalized_direction = direction / direction.z;
-                let view_pos = depth_normalized_direction * depth;
-                debug_assert_eq!(view_pos.z, depth);
-                Some(view_pos.truncate())
-            };
-
         let view_offset = match projection {
-            Projection::Perspective(perspective) => {
-                let Some(offset) = screen_to_view_space_at_depth(perspective, anchor.z) else {
-                    error!("Malformed camera");
-                    return;
-                };
-                offset
-            }
             Projection::Orthographic(ortho) => DVec2::new(-ortho.scale as f64, ortho.scale as f64),
-            Projection::Custom(_) => {
-                error_once!("Custom projections are not supported.");
-                return;
-            }
+            Projection::Custom(_) => unreachable!(),
+            Projection::Perspective(_) => unreachable!(),
         };
 
         let pan_translation_view_space = (pan * view_offset).extend(0.0);
@@ -428,24 +339,15 @@ impl EditorCam {
         };
 
         let zoom_translation_view_space = match projection {
-            Projection::Perspective(perspective) => {
-                let zoom_amount = if self.zoom_limits.zoom_through_objects {
-                    // Clamp the zoom speed at the limits
-                    zoom * size_at_anchor.clamp(
-                        self.zoom_limits.min_size_per_pixel,
-                        self.zoom_limits.max_size_per_pixel,
-                    ) as f64
-                } else {
-                    // If we cannot zoom through objects, use the bounded input
-                    zoom_bounded * size_at_anchor as f64
-                };
-                // Scale this with the perspective FOV, so zoom speed feels the same regardless.
-                anchor.normalize() * zoom_amount / perspective.fov as f64
-            }
+            Projection::Perspective(_perspective) => unreachable!(),
             Projection::Orthographic(ref mut ortho) => {
                 // Constants are hand tuned to feel equivalent between perspective and ortho. Might
                 // be a better way to do this correctly, if it matters.
                 ortho.scale *= 1.0 - zoom_bounded as f32 * 0.0015;
+                // NOTE: Limit zooming so we won't flip direction
+                if ortho.scale < 0.001 {
+                    ortho.scale = 0.001;
+                }
                 // We don't move the camera in z, as this is managed by another ortho system.
                 anchor.normalize()
                     * zoom_bounded
@@ -453,10 +355,7 @@ impl EditorCam {
                     * 0.0015
                     * DVec3::new(1.0, 1.0, 0.0)
             }
-            Projection::Custom(_) => {
-                error_once!("Custom projections are not supported.");
-                return;
-            }
+            Projection::Custom(_) => unreachable!(),
         };
 
         // If we can zoom through objects, then scoot the anchor point forward when we hit the
@@ -475,82 +374,6 @@ impl EditorCam {
             .as_vec3();
 
         *anchor -= pan_translation_view_space + zoom_translation_view_space;
-
-        let orbit = orbit * DVec2::new(-1.0, 1.0);
-        let anchor_world = cam_transform
-            .compute_matrix()
-            .as_dmat4()
-            .transform_point3(*anchor);
-        let orbit_dir = orbit.normalize().extend(0.0);
-        let orbit_axis_world = cam_transform
-            .rotation
-            .as_dquat()
-            .mul_vec3(orbit_dir.cross(DVec3::NEG_Z).normalize())
-            .normalize();
-
-        let rotate_around = |transform: &mut Transform, point: DVec3, rotation: DQuat| {
-            // Following lines are f64 versions of Transform::rotate_around
-            transform.translation =
-                (point + rotation * (transform.translation.as_dvec3() - point)).as_vec3();
-            transform.rotation = (rotation * transform.rotation.as_dquat())
-                .as_quat()
-                .normalize();
-        };
-
-        let orbit_multiplier = 0.005;
-        if orbit.is_finite() && orbit.length() != 0.0 {
-            match self.orbit_constraint {
-                OrbitConstraint::Fixed { up, can_pass_tdc } => {
-                    let epsilon = 1e-3;
-                    let motion_threshold = 1e-5;
-
-                    let angle_to_bdc = cam_transform.forward().angle_between(up) as f64;
-                    let angle_to_tdc = cam_transform.forward().angle_between(-up) as f64;
-                    let pitch_angle = {
-                        let desired_rotation = orbit.y * orbit_multiplier;
-                        if can_pass_tdc {
-                            desired_rotation
-                        } else if desired_rotation >= 0.0 {
-                            desired_rotation.min(angle_to_tdc - (epsilon as f64).min(angle_to_tdc))
-                        } else {
-                            desired_rotation.max(-angle_to_bdc + (epsilon as f64).min(angle_to_bdc))
-                        }
-                    };
-                    let pitch = if pitch_angle.abs() <= motion_threshold {
-                        DQuat::IDENTITY
-                    } else {
-                        DQuat::from_axis_angle(cam_transform.left().as_dvec3(), pitch_angle)
-                    };
-
-                    let yaw_angle = orbit.x * orbit_multiplier;
-                    let yaw = if yaw_angle.abs() <= motion_threshold {
-                        DQuat::IDENTITY
-                    } else {
-                        DQuat::from_axis_angle(up.as_dvec3(), yaw_angle)
-                    };
-
-                    match [pitch == DQuat::IDENTITY, yaw == DQuat::IDENTITY] {
-                        [true, true] => (),
-                        [true, false] => rotate_around(cam_transform, anchor_world, yaw),
-                        [false, true] => rotate_around(cam_transform, anchor_world, pitch),
-                        [false, false] => rotate_around(cam_transform, anchor_world, yaw * pitch),
-                    };
-
-                    let how_upright = cam_transform.up().angle_between(up).abs();
-                    // Orient the camera so up always points up (roll).
-                    if how_upright > epsilon && how_upright < FRAC_PI_2 - epsilon {
-                        cam_transform.look_to(cam_transform.forward(), up);
-                    } else if how_upright > FRAC_PI_2 + epsilon && how_upright < PI - epsilon {
-                        cam_transform.look_to(cam_transform.forward(), -up);
-                    }
-                }
-                OrbitConstraint::Free => {
-                    let rotation =
-                        DQuat::from_axis_angle(orbit_axis_world, orbit.length() * orbit_multiplier);
-                    rotate_around(cam_transform, anchor_world, rotation);
-                }
-            }
-        }
 
         self.last_anchor_depth = anchor.z;
     }
@@ -574,45 +397,16 @@ impl EditorCam {
     }
 }
 
-/// Settings that define how camera orbit behaves.
-#[derive(Debug, Clone, Copy, Reflect)]
-pub enum OrbitConstraint {
-    /// The camera's up direction is fixed.
-    Fixed {
-        /// The camera's up direction must always be parallel with this unit vector.
-        up: Vec3,
-        /// Should the camera be allowed to pass over top dead center (TDC), making the camera
-        /// upside down compared to the up direction?
-        can_pass_tdc: bool,
-    },
-    /// The camera's up direction is free.
-    Free,
-}
-
-impl Default for OrbitConstraint {
-    fn default() -> Self {
-        Self::Fixed {
-            up: Vec3::Y,
-            can_pass_tdc: false,
-        }
-    }
-}
-
 /// The sensitivity of the camera controller to inputs.
 #[derive(Debug, Clone, Copy, Reflect)]
 pub struct Sensitivity {
-    /// X/Y sensitivity of orbit inputs, multiplied.
-    pub orbit: Vec2,
     /// Sensitivity of zoom inputs, multiplied.
     pub zoom: f32,
 }
 
 impl Default for Sensitivity {
     fn default() -> Self {
-        Self {
-            orbit: Vec2::splat(1.0),
-            zoom: 1.0,
-        }
+        Self { zoom: 1.0 }
     }
 }
 

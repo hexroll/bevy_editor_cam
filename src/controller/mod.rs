@@ -23,7 +23,6 @@ impl Plugin for MinimalEditorCamPlugin {
             (
                 crate::controller::component::EditorCam::update_camera_positions,
                 crate::controller::projections::update_orthographic,
-                crate::controller::projections::update_perspective,
             )
                 .chain()
                 .after(bevy_picking::PickSet::Last),

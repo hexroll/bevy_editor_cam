@@ -169,7 +169,6 @@
 #![warn(missing_docs)]
 
 pub mod controller;
-pub mod extensions;
 pub mod input;
 
 /// Common imports.
@@ -190,15 +189,7 @@ impl PluginGroup for DefaultEditorCamPlugins {
     fn build(self) -> PluginGroupBuilder {
         let group = PluginGroupBuilder::start::<Self>()
             .add(input::DefaultInputPlugin)
-            .add(controller::MinimalEditorCamPlugin)
-            .add(extensions::dolly_zoom::DollyZoomPlugin)
-            .add(extensions::look_to::LookToPlugin);
-
-        #[cfg(feature = "extension_anchor_indicator")]
-        let group = group.add(extensions::anchor_indicator::AnchorIndicatorPlugin);
-
-        #[cfg(feature = "extension_independent_skybox")]
-        let group = group.add(extensions::independent_skybox::IndependentSkyboxPlugin);
+            .add(controller::MinimalEditorCamPlugin);
 
         group
     }

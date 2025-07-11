@@ -7,6 +7,8 @@ use bevy_input::{
     mouse::{MouseScrollUnit, MouseWheel},
     prelude::*,
 };
+use bevy_inspector_egui::bevy_egui::input::egui_wants_any_input;
+use bevy_log::warn_once;
 use bevy_math::{prelude::*, DVec2, DVec3};
 use bevy_platform::collections::HashMap;
 use bevy_reflect::prelude::*;
@@ -14,17 +16,13 @@ use bevy_render::{camera::CameraProjection, prelude::*};
 use bevy_transform::prelude::*;
 use bevy_window::PrimaryWindow;
 
-use bevy_picking::pointer::{
-    PointerAction, PointerId, PointerInput, PointerInteraction, PointerLocation, PointerMap,
-};
+use bevy_picking::pointer::{PointerAction, PointerId, PointerInput, PointerLocation, PointerMap};
 
 use crate::prelude::{component::EditorCam, inputs::MotionInputs};
 
 /// The type of mutually exclusive camera motion.
 #[derive(Debug, Clone, Copy, Reflect, PartialEq, Eq)]
 pub enum MotionKind {
-    /// The camera is orbiting and zooming.
-    OrbitZoom,
     /// The camera is panning and zooming.
     PanZoom,
     /// The camera is only zooming.
@@ -34,7 +32,6 @@ pub enum MotionKind {
 impl From<&MotionInputs> for MotionKind {
     fn from(value: &MotionInputs) -> Self {
         match value {
-            MotionInputs::OrbitZoom { .. } => MotionKind::OrbitZoom,
             MotionInputs::PanZoom { .. } => MotionKind::PanZoom,
             MotionInputs::Zoom { .. } => MotionKind::Zoom,
         }
@@ -77,7 +74,6 @@ pub fn default_camera_inputs(
     cameras: Query<(Entity, &Camera, &EditorCam)>,
     primary_window: Query<Entity, With<PrimaryWindow>>,
 ) {
-    let orbit_start = MouseButton::Right;
     let pan_start = MouseButton::Left;
     let zoom_stop = 0.0;
 
@@ -96,7 +92,7 @@ pub fn default_camera_inputs(
             .unwrap_or(0.0);
         let should_zoom_end = is_in_zoom_mode && zoom_amount_abs <= zoom_stop;
 
-        if mouse_input.any_just_released([orbit_start, pan_start]) || should_zoom_end {
+        if mouse_input.any_just_released([pan_start]) || should_zoom_end {
             controller.write(EditorCamInputEvent::End { camera });
         }
     }
@@ -113,13 +109,7 @@ pub fn default_camera_inputs(
                     continue; // Pointer must be in viewport to start a motion.
                 };
 
-                if mouse_input.just_pressed(orbit_start) {
-                    controller.write(EditorCamInputEvent::Start {
-                        kind: MotionKind::OrbitZoom,
-                        camera,
-                        pointer,
-                    });
-                } else if mouse_input.just_pressed(pan_start) {
+                if mouse_input.just_pressed(pan_start) {
                     controller.write(EditorCamInputEvent::Start {
                         kind: MotionKind::PanZoom,
                         camera,
@@ -187,15 +177,19 @@ impl EditorCamInputEvent {
     /// Receive [`EditorCamInputEvent`]s, and use these to start and end moves on the [`EditorCam`].
     pub fn receive_events(
         mut events: EventReader<Self>,
-        mut controllers: Query<(&mut EditorCam, &GlobalTransform)>,
+        mut controllers: Query<(&mut EditorCam, &GlobalTransform, &Camera)>,
         mut camera_map: ResMut<CameraPointerMap>,
         pointer_map: Res<PointerMap>,
-        pointer_interactions: Query<&PointerInteraction>,
         pointer_locations: Query<&PointerLocation>,
         cameras: Query<(&Camera, &Projection)>,
+        egui_wants_input: Res<bevy_inspector_egui::bevy_egui::input::EguiWantsInput>,
     ) {
+        if egui_wants_any_input(egui_wants_input) {
+            return;
+        }
         for event in events.read() {
-            let Ok((mut controller, cam_transform)) = controllers.get_mut(event.camera()) else {
+            let Ok((mut controller, _cam_transform, _cam)) = controllers.get_mut(event.camera())
+            else {
                 continue;
             };
 
@@ -204,41 +198,26 @@ impl EditorCamInputEvent {
                     if controller.is_actively_controlled() {
                         continue;
                     }
-                    let anchor = pointer_map
-                        .get_entity(*pointer)
-                        .and_then(|entity| pointer_interactions.get(entity).ok())
-                        .and_then(|interaction| interaction.get_nearest_hit())
-                        .and_then(|(_, hit)| hit.position)
-                        .map(|world_space_hit| {
-                            // Convert the world space hit to view (camera) space
-                            cam_transform
-                                .compute_matrix()
-                                .as_dmat4()
-                                .inverse()
-                                .transform_point3(world_space_hit.into())
-                        })
-                        .or_else(|| {
-                            let camera = cameras.get(event.camera()).ok();
-                            let pointer_location = pointer_map
-                                .get_entity(*pointer)
-                                .and_then(|entity| pointer_locations.get(entity).ok())
-                                .and_then(|l| l.location());
-                            if let Some(((camera, proj), pointer_location)) =
-                                camera.zip(pointer_location)
-                            {
-                                screen_to_view_space(
-                                    camera,
-                                    proj,
-                                    &controller,
-                                    pointer_location.position,
-                                )
-                            } else {
-                                None
-                            }
-                        });
-
+                    let anchor = {
+                        let camera = cameras.get(event.camera()).ok();
+                        let pointer_location = pointer_map
+                            .get_entity(*pointer)
+                            .and_then(|entity| pointer_locations.get(entity).ok())
+                            .and_then(|l| l.location());
+                        if let Some(((camera, proj), pointer_location)) =
+                            camera.zip(pointer_location)
+                        {
+                            screen_to_view_space(
+                                camera,
+                                proj,
+                                &controller,
+                                pointer_location.position,
+                            )
+                        } else {
+                            None
+                        }
+                    };
                     match kind {
-                        MotionKind::OrbitZoom => controller.start_orbit(anchor),
                         MotionKind::PanZoom => controller.start_pan(anchor),
                         MotionKind::Zoom => controller.start_zoom(anchor),
                     }
@@ -274,7 +253,11 @@ impl EditorCamInputEvent {
         mut camera_controllers: Query<&mut EditorCam>,
         mut mouse_wheel: EventReader<MouseWheel>,
         mut moves: EventReader<PointerInput>,
+        egui_wants_input: Res<bevy_inspector_egui::bevy_egui::input::EguiWantsInput>,
     ) {
+        if egui_wants_any_input(egui_wants_input) {
+            return;
+        }
         let moves_list: Vec<_> = moves.read().collect();
         for (pointer, camera) in camera_map.iter() {
             let Ok(mut camera_controller) = camera_controllers.get_mut(*camera) else {
@@ -287,8 +270,9 @@ impl EditorCamInputEvent {
                 .filter_map(|m| match m.action {
                     PointerAction::Move { delta } => Some(delta),
                     PointerAction::Press { .. } => None,
+                    PointerAction::Release(..) => None,
+                    PointerAction::Scroll { .. } => None,
                     PointerAction::Cancel => None,
-                    _ => None,
                 })
                 .sum();
 
@@ -334,16 +318,18 @@ fn screen_to_view_space(
     let ndc_to_view = proj.get_clip_from_view().as_dmat4().inverse();
     let view_near_plane = ndc_to_view.project_point3(ndc.extend(1.));
     match &proj {
-        Projection::Perspective(_) | Projection::Custom(_) => {
-            // Using EPSILON because an NDC with Z = 0 returns NaNs.
-            let view_far_plane = ndc_to_view.project_point3(ndc.extend(f64::EPSILON));
-            let direction = (view_far_plane - view_near_plane).normalize();
-            Some((direction / direction.z) * controller.last_anchor_depth())
+        Projection::Perspective(_) => {
+            warn_once!("Perspective projection not supported");
+            None
         }
         Projection::Orthographic(_) => Some(DVec3::new(
             view_near_plane.x,
             view_near_plane.y,
             controller.last_anchor_depth(),
         )),
+        Projection::Custom(_) => {
+            warn_once!("Custom projection not supported");
+            None
+        }
     }
 }

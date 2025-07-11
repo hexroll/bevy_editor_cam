@@ -10,13 +10,6 @@ use super::smoothing::InputQueue;
 /// Tracks the current exclusive motion type and input queue of the camera controller.
 #[derive(Debug, Clone, Reflect)]
 pub enum MotionInputs {
-    /// The camera can orbit and zoom
-    OrbitZoom {
-        /// A queue of screenspace orbiting inputs; usually the mouse drag vector.
-        screenspace_inputs: InputQueue<Vec2>,
-        /// A queue of zoom inputs.
-        zoom_inputs: InputQueue<f32>,
-    },
     /// The camera can pan and zoom
     PanZoom {
         /// A queue of screenspace panning inputs; usually the mouse drag vector.
@@ -32,26 +25,6 @@ pub enum MotionInputs {
 }
 
 impl MotionInputs {
-    /// The motion-conserving smoothed orbit velocity in screen space.
-    pub fn smooth_orbit_velocity(&self) -> DVec2 {
-        if let Self::OrbitZoom {
-            screenspace_inputs, ..
-        } = self
-        {
-            let value = screenspace_inputs
-                .latest_smoothed()
-                .unwrap_or(Vec2::ZERO)
-                .as_dvec2();
-            if value.is_finite() {
-                value
-            } else {
-                DVec2::ZERO
-            }
-        } else {
-            DVec2::ZERO
-        }
-    }
-
     /// The motion-conserving smoothed pan velocity in screen space.
     pub fn smooth_pan_velocity(&self) -> DVec2 {
         if let Self::PanZoom {
@@ -66,23 +39,6 @@ impl MotionInputs {
                 value
             } else {
                 DVec2::ZERO
-            }
-        } else {
-            DVec2::ZERO
-        }
-    }
-
-    /// Approximate orbit velocity over the last `window`. to use for momentum calculations.
-    pub fn orbit_momentum(&self, window: Duration) -> DVec2 {
-        if let Self::OrbitZoom {
-            screenspace_inputs, ..
-        } = self
-        {
-            let velocity = screenspace_inputs.average_smoothed_value(window).as_dvec2();
-            if !velocity.is_finite() {
-                DVec2::ZERO
-            } else {
-                velocity
             }
         } else {
             DVec2::ZERO
@@ -119,7 +75,6 @@ impl MotionInputs {
     /// Get a reference to the queue of zoom inputs.
     pub fn zoom_inputs(&self) -> &InputQueue<f32> {
         match self {
-            MotionInputs::OrbitZoom { zoom_inputs, .. } => zoom_inputs,
             MotionInputs::PanZoom { zoom_inputs, .. } => zoom_inputs,
             MotionInputs::Zoom { zoom_inputs } => zoom_inputs,
         }
@@ -128,7 +83,6 @@ impl MotionInputs {
     /// Get a mutable reference to the queue of zoom inputs.
     pub fn zoom_inputs_mut(&mut self) -> &mut InputQueue<f32> {
         match self {
-            MotionInputs::OrbitZoom { zoom_inputs, .. } => zoom_inputs,
             MotionInputs::PanZoom { zoom_inputs, .. } => zoom_inputs,
             MotionInputs::Zoom { zoom_inputs } => zoom_inputs,
         }
@@ -137,7 +91,6 @@ impl MotionInputs {
     /// Approximate smoothed  absolute value of the zoom velocity over the last `window`.
     pub fn zoom_velocity_abs(&self, window: Duration) -> f64 {
         let zoom_inputs = match self {
-            MotionInputs::OrbitZoom { zoom_inputs, .. } => zoom_inputs,
             MotionInputs::PanZoom { zoom_inputs, .. } => zoom_inputs,
             MotionInputs::Zoom { zoom_inputs } => zoom_inputs,
         };

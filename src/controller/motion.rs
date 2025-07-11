@@ -65,13 +65,7 @@ impl CurrentMotion {
 
     /// Returns true if the camera is user controlled and orbiting.
     pub fn is_orbiting(&self) -> bool {
-        matches!(
-            self,
-            Self::UserControlled {
-                motion_inputs: MotionInputs::OrbitZoom { .. },
-                ..
-            }
-        )
+        matches!(self, Self::UserControlled { .. })
     }
 
     /// Returns true if the camera is user controlled and panning.

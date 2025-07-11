@@ -9,51 +9,6 @@ use crate::prelude::*;
 
 use self::motion::CurrentMotion;
 
-/// Settings used when the [`EditorCam`] has a perspective [`Projection`].
-#[derive(Debug, Clone, Reflect)]
-pub struct PerspectiveSettings {
-    /// Limits the near clipping plane to always fit inside this range.
-    ///
-    /// The camera controller will try to make the near clipping plane smaller when you zoom in to
-    /// ensure the anchor (the thing you are zooming into) is always within the view frustum
-    /// (visible), bounded by this limit.
-    ///
-    /// Unless the camera is zoomed very close to something, it will spend most of the time at the
-    /// high end of this limit - you should treat that like the default near clipping plane. Bevy
-    /// defaults to `0.1`, and you should probably use that too unless you have a very good reason
-    /// not to. Many rendering effects that rely on depth can break down if the clipping plane is
-    /// very far from `0.1`.
-    pub near_clip_limits: std::ops::Range<f32>,
-    /// When computing the near plane position, the anchor depth is multiplied by this value to
-    /// determine the new near clip position. This should be smaller than one, to ensure that the
-    /// object you are looking at, which will be located at the anchor position, is bot being
-    /// clipped. Some parts of the object may protrude toward the camera, which is what necessitates
-    /// this.
-    pub near_clip_multiplier: f32,
-}
-
-impl Default for PerspectiveSettings {
-    fn default() -> Self {
-        Self {
-            near_clip_limits: 1e-9..f32::INFINITY,
-            near_clip_multiplier: 0.05,
-        }
-    }
-}
-
-/// Updates perspective projection properties of editor cameras.
-pub fn update_perspective(mut cameras: Query<(&EditorCam, &mut Projection)>) {
-    for (editor_cam, mut projection) in cameras.iter_mut() {
-        let Projection::Perspective(ref mut perspective) = *projection else {
-            continue;
-        };
-        let limits = editor_cam.perspective.near_clip_limits.clone();
-        let multiplier = editor_cam.perspective.near_clip_multiplier;
-        perspective.near = (editor_cam.last_anchor_depth.abs() as f32 * multiplier)
-            .clamp(limits.start, limits.end);
-    }
-}
-
 /// Settings used when the [`EditorCam`] has an orthographic [`Projection`].
 #[derive(Debug, Clone, Reflect)]
 pub struct OrthographicSettings {
