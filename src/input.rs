@@ -56,6 +56,7 @@ impl Plugin for DefaultInputPlugin {
                     EditorCamInputEvent::send_pointer_inputs,
                 )
                     .chain()
+                    .run_if(not(egui_wants_any_input))
                     .after(bevy_picking::PickSet::Last)
                     .before(crate::controller::component::EditorCam::update_camera_positions),
             )
@@ -182,11 +183,7 @@ impl EditorCamInputEvent {
         pointer_map: Res<PointerMap>,
         pointer_locations: Query<&PointerLocation>,
         cameras: Query<(&Camera, &Projection)>,
-        egui_wants_input: Res<bevy_inspector_egui::bevy_egui::input::EguiWantsInput>,
     ) {
-        if egui_wants_any_input(egui_wants_input) {
-            return;
-        }
         for event in events.read() {
             let Ok((mut controller, _cam_transform, _cam)) = controllers.get_mut(event.camera())
             else {
@@ -253,11 +250,7 @@ impl EditorCamInputEvent {
         mut camera_controllers: Query<&mut EditorCam>,
         mut mouse_wheel: EventReader<MouseWheel>,
         mut moves: EventReader<PointerInput>,
-        egui_wants_input: Res<bevy_inspector_egui::bevy_egui::input::EguiWantsInput>,
     ) {
-        if egui_wants_any_input(egui_wants_input) {
-            return;
-        }
         let moves_list: Vec<_> = moves.read().collect();
         for (pointer, camera) in camera_map.iter() {
             let Ok(mut camera_controller) = camera_controllers.get_mut(*camera) else {
