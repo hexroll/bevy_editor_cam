@@ -1,22 +1,13 @@
 //! Provides a default input plugin for the camera. See [`DefaultInputPlugin`].
 
-use bevy_app::prelude::*;
-use bevy_derive::{Deref, DerefMut};
-use bevy_ecs::prelude::*;
-use bevy_input::{
-    mouse::{MouseScrollUnit, MouseWheel},
+use bevy::{
+    input::mouse::{MouseScrollUnit, MouseWheel},
+    math::{DVec2, DVec3},
+    picking::pointer::{PointerAction, PointerId, PointerInput, PointerLocation, PointerMap},
+    platform::collections::HashMap,
     prelude::*,
+    window::PrimaryWindow,
 };
-use bevy_inspector_egui::bevy_egui::input::egui_wants_any_input;
-use bevy_log::warn_once;
-use bevy_math::{prelude::*, DVec2, DVec3};
-use bevy_platform::collections::HashMap;
-use bevy_reflect::prelude::*;
-use bevy_render::{camera::CameraProjection, prelude::*};
-use bevy_transform::prelude::*;
-use bevy_window::PrimaryWindow;
-
-use bevy_picking::pointer::{PointerAction, PointerId, PointerInput, PointerLocation, PointerMap};
 
 use crate::prelude::{component::EditorCam, inputs::MotionInputs};
 
@@ -46,7 +37,7 @@ impl From<&MotionInputs> for MotionKind {
 pub struct DefaultInputPlugin;
 impl Plugin for DefaultInputPlugin {
     fn build(&self, app: &mut App) {
-        app.add_event::<crate::input::EditorCamInputEvent>()
+        app.add_message::<crate::input::EditorCamInputEvent>()
             .init_resource::<crate::input::CameraPointerMap>()
             .add_systems(
                 PreUpdate,
@@ -56,8 +47,8 @@ impl Plugin for DefaultInputPlugin {
                     EditorCamInputEvent::send_pointer_inputs,
                 )
                     .chain()
-                    .run_if(not(egui_wants_any_input))
-                    .after(bevy_picking::PickSet::Last)
+                    .run_if(not(bevy_egui::input::egui_wants_any_pointer_input))
+                    .after(bevy::picking::PickingSystems::Last)
                     .before(crate::controller::component::EditorCam::update_camera_positions),
             )
             .register_type::<CameraPointerMap>()
@@ -69,8 +60,8 @@ impl Plugin for DefaultInputPlugin {
 pub fn default_camera_inputs(
     pointers: Query<(&PointerId, &PointerLocation)>,
     pointer_map: Res<CameraPointerMap>,
-    mut controller: EventWriter<EditorCamInputEvent>,
-    mut mouse_wheel: EventReader<MouseWheel>,
+    mut controller: MessageWriter<EditorCamInputEvent>,
+    mut mouse_wheel: MessageReader<MouseWheel>,
     mouse_input: Res<ButtonInput<MouseButton>>,
     cameras: Query<(Entity, &Camera, &EditorCam)>,
     primary_window: Query<Entity, With<PrimaryWindow>>,
@@ -146,7 +137,7 @@ pub fn default_camera_inputs(
 pub struct CameraPointerMap(HashMap<PointerId, Entity>);
 
 /// Events used when implementing input systems for the [`EditorCam`].
-#[derive(Debug, Clone, Reflect, Event)]
+#[derive(Debug, Clone, Reflect, Message)]
 pub enum EditorCamInputEvent {
     /// Send this event to start moving the camera. The anchor and inputs will be computed
     /// automatically until the [`EditorCamInputEvent::End`] event is received.
@@ -177,7 +168,7 @@ impl EditorCamInputEvent {
 
     /// Receive [`EditorCamInputEvent`]s, and use these to start and end moves on the [`EditorCam`].
     pub fn receive_events(
-        mut events: EventReader<Self>,
+        mut events: MessageReader<Self>,
         mut controllers: Query<(&mut EditorCam, &GlobalTransform, &Camera)>,
         mut camera_map: ResMut<CameraPointerMap>,
         pointer_map: Res<PointerMap>,
@@ -248,8 +239,8 @@ impl EditorCamInputEvent {
     pub fn send_pointer_inputs(
         camera_map: Res<CameraPointerMap>,
         mut camera_controllers: Query<&mut EditorCam>,
-        mut mouse_wheel: EventReader<MouseWheel>,
-        mut moves: EventReader<PointerInput>,
+        mut mouse_wheel: MessageReader<MouseWheel>,
+        mut moves: MessageReader<PointerInput>,
     ) {
         let moves_list: Vec<_> = moves.read().collect();
         for (pointer, camera) in camera_map.iter() {
