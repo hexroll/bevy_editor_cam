@@ -241,6 +241,7 @@ impl EditorCamInputEvent {
         mut camera_controllers: Query<&mut EditorCam>,
         mut mouse_wheel: MessageReader<MouseWheel>,
         mut moves: MessageReader<PointerInput>,
+        time: Res<Time>,
     ) {
         let moves_list: Vec<_> = moves.read().collect();
         for (pointer, camera) in camera_map.iter() {
@@ -266,8 +267,8 @@ impl EditorCamInputEvent {
                     .read()
                     .map(|mw| {
                         let scroll_multiplier = match mw.unit {
-                            MouseScrollUnit::Line => 150.0,
-                            MouseScrollUnit::Pixel => 1.0,
+                            MouseScrollUnit::Line => 9000.0 * time.delta_secs(),
+                            MouseScrollUnit::Pixel => 60.0 * time.delta_secs(),
                         };
                         mw.y * scroll_multiplier
                     })
